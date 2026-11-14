@@ -102,3 +102,10 @@ All settings configured in the Unity Playworks Plugin UI (`Window -> Unity Playw
 ### 3.3 Browser Console: `X is not a function` or `Cannot set properties of undefined (setting 'fontRatio')`
 - **`X is not a function`** when C# compiles cleanly: Either the build output in `stage4/develop` is stale (clear `LunaTemp/` and do a full rebuild) or a newer Unity API overload is missing in Luna's JS runtime (check `LunaTemp/stage3/`).
 - **`Cannot set properties of undefined (setting 'fontRatio')` at `startGame`**: Happens when previewing `iframe.html` before `engine/luna/script1.js` finishes writing/loading (~5s after build). Hard-refresh (`Ctrl+F5`) after the build completes.
+
+### 3.4 Hand Edits to `luna.json` Get Overwritten
+- **Cause**: the Luna plugin window keeps its own in-memory copy of the config and writes it back on save/export, so
+  edits made on disk (by hand or by a script/agent) while the window is open can be silently lost.
+- **Fix**: after editing on disk, reload before building: `Tools/Luna/Refresh From Disk` (GangterCity `LunaTools`),
+  or close/reopen the Luna window or force a script reload. Re-open `luna.json` after the build to confirm the edit stuck.
+  Per-asset texture overrides on font assets are regenerated on every export regardless (see constraints 5.0).

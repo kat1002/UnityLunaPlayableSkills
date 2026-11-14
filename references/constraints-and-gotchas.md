@@ -91,10 +91,31 @@ Luna transpiles C# to JavaScript (`LunaTemp/stage3/`) and uses its own JS implem
 - **Unsupported in Luna**:
   - ParticleSystem **Trails** module (ribbon trails vanish in build) -> use a `TrailRenderer` component on a child GameObject instead.
   - ParticleSystem **Bursts** and sprite-sheet start frame -> use `rateOverTime` or `rateOverDistance`, or use custom pooled UI emitters (`EmojiImageParticleEmitter`).
+- **Toggling `emission.rateOverTime` 0 -> N at runtime ("pull back" / inward-collapsing stars)**: Luna's rate emitter
+  (`particle-system-1.js`) catches up `while (lastSpawn + 1/rate < playTime)` and spawns each particle pre-aged by the
+  backlog. While rate is 0, `lastSpawn` freezes but `playTime` keeps running (only `play()` resets it; `isPlaying` stays
+  true after play-on-awake), so turning the rate back on spawns up to maxParticles already-far-out particles whose offset
+  shrinks each frame, which reads as a ring collapsing to the center. Editor looks fine.
+  **Fix**: keep `rateOverTime` 0 in the scene and emit from Update with `ps.Emit(n)` plus a fractional accumulator
+  (`acc += rate*dt; n=(int)acc; acc-=n`). Do not call `Play()` to reset it, because Luna's `play()` clears live particles.
+  (Seen in StickiiPA PA02 `StickerWorldGame.Shower` / `StickerZipBag.SetStars`.)
 
 ---
 
 ## 5. Custom Shaders, Materials & Spine
+
+### 5.0 TMP SDF atlas downscaled by luna.json -> blurry outlined/large text
+- **Symptom**: One TMP text looks soft/wobbly in the build while other text from the same font looks fine.
+- **Root Cause**: A `luna.json` texture override (e.g. `maxWidth/maxHeight: 512`) on the `*SDF.asset` halves the atlas
+  (1024 -> 512), halving the effective sampling size and SDF spread, while the material keeps `_TextureWidth`/`_GradientScale`.
+  Outlined materials (`OUTLINE_ON`) and big auto-sized text show it first; small no-outline text hides it.
+- **The per-asset override cannot be changed**: on every export the plugin (decompiled `EditorScripts.dll`, 7.2.0)
+  deletes the font asset's own texture override and recreates it from the texture default, or from the longest
+  *folder* override whose name is a prefix of the asset path, with compression forced to `none`. A size typed on the
+  font asset's own row is therefore reset to the default (512) on each build.
+- **Fix**: Add a *folder* override (e.g. `"name": "Assets/Fonts/Baloo/"`, `maxWidth/maxHeight: 1024`) or raise the
+  texture default; verify with `LunaTemp/stage2/assets/textures/<id>.png` dimensions. If the size budget is tight,
+  regenerate a smaller ASCII-only atlas instead of letting Luna downscale it.
 
 ### 5.1 `Sprite.textureRect` vs Downscaled `Texture.width / height`
 - **Root Cause**: When Luna downscales a texture (e.g., from `950x660` to `512x356` per `luna.json`), `sprite.textureRect` still returns **native pixels** (`950x660`), whereas `sprite.texture.width/height` returns the **downscaled dimensions** (`512x356`). Computing UV bounds as `textureRect / textureSize` yields values `> 1.0` (`1.855`), breaking custom shaders!
@@ -111,6 +132,21 @@ Luna transpiles C# to JavaScript (`LunaTemp/stage3/`) and uses its own JS implem
 - Luna's JS `setVectorParameter(name, e.data)` caches and compares vector references. Mutating a long-lived `Vector4` field in place and passing it back to `mat.SetVector("_Param", m_CachedVec)` can be skipped by Luna's dirty check.
 - **Fix**: Always pass a fresh `new Vector4(x, y, z, w)` to `Material.SetVector`.
 
+### 5.2b UI Vertex Space Differs (Position-Based UI Shader Effects Land in the Wrong Place)
+- **Symptom**: a UI shader effect that derives position from `v.vertex` (or `mul(unity_ObjectToWorld, v.vertex)`), e.g. a ripple centre or a hole shadow keyed to a map, is correct in the Game view but shifted/scaled in the Luna build, and wrong again in the Scene view.
+- **Root Cause**: UI vertex space is not consistent: Unity's Game view batches into canvas space, the Scene view draws a Screen Space Overlay canvas with a different matrix, and Luna draws each graphic with its own transform.
+- **Fix**: derive positions from the **sprite UV**, with a per-material affine set from C# (`mapPx = uv * _UVToMapPx.xy + _UVToMapPx.zw`, computed from `RectTransform.GetWorldCorners` on the CPU, written only when it changes, as a fresh `Vector4`). Keep `v.vertex` only for `_ClipRect` clipping. Assumes Simple, unrotated sprites whose mesh spans `textureRect` (see 5.1 for downscaled textures).
+
+### 5.2c Opaque Textures Are Exported as JPEG (Breaks Data Textures)
+- **Symptom**: a shader reading a data texture (distance field / SDF / lookup / masks packed in RGB) looks right in the Editor but misshapen in the build (e.g. an inner hole shadow inset with a hard edge). `LunaTemp/stage2/assets/textures/<id>.json` shows `"ext": ".jpeg"`.
+- **Root Cause**: Luna converts any texture whose **imported pixels are fully opaque** to lossy JPEG, ignoring the `luna.json` rule (`format: "png32"`, `compression: "none"`). It reads the texture as imported for the **active build target** (often Standalone), so a WebGL platform override does not help. An explicit `RGB24` default format drops alpha even if the PNG has it. JPEG chroma subsampling then corrupts each channel independently.
+- **Fix** (all three):
+  1. Bake a non-opaque alpha into the source PNG (e.g. alpha = 254 everywhere; harmless when the shader reads only `.rgb`). Keep `alphaIsTransparency` off.
+  2. Set the importer **default** format to `RGBA32`, uncompressed (sRGB off for data).
+  3. Set the texture's `luna.json` rule to `"compression": "none"` (`quantSize` palette-quantizes smooth gradients).
+- **Verify** after build: `ext` is `.png` and `LunaTemp/stage2/assets/textures/<id>.png` exists.
+- **Hole/shore distance fields**: generate with **`Tools/PlayableKit/Shore Field Generator`** (`PAShoreFieldGenerator`), which applies steps 1-2 automatically (alpha 254, RGBA32, linear) and writes `_ShoreTex` / `_PairSplitY` / `_MapSize` to the chosen materials; only the `luna.json` rule (step 3) is manual.
+
 ### 5.3 Spine & Render Pipeline Shaders
 - **Spine Data Format**: Luna requires JSON Spine exports (`.json` assigned to `skeletonJSON`). Binary `.skel.bytes` fails in Luna — verify with **`Tools/MyLunaHelper/Spine Binary Inspector`**.
 - **Single Spine Runtime**: Never keep both the UPM package `com.esotericsoftware.spine.spine-csharp` and local source `Assets/Libs/Spine/` in the same project (causes GUID conflicts).
@@ -118,3 +154,17 @@ Luna transpiles C# to JavaScript (`LunaTemp/stage3/`) and uses its own JS implem
   - **URP 2D Renderer fails export (Stage 1 `LP1025`, `ExportCollectionException: UrpAssetsCollection`, `Member 'Renderer2DData.copyDepthMode' not found`)**: Luna 7.2 reflects 2D-renderer fields that don't exist in URP 17 (Unity 6). Projects made from the URP 2D template hit this. **Fix**: create a `UniversalRendererData` asset (assign URP's default `PostProcessData`), make it the only entry in the URP asset's `m_RendererDataList`, and delete the template's leftover `Global Light 2D`. Safe when the playable is UGUI/unlit (no `Light2D` lighting, no `Universal2D`-only shader passes).
   - Check active pipeline via `GraphicsSettings.currentRenderPipeline` before changing materials (do not blindly trust docs if a project uses Built-in `Standard`).
   - For Luna compatibility, avoid `URP/Lit` and `Shader Graph` on scene renderers; use `Sprites/Default`, `UI/Default`, `Unlit/Texture`, or custom GLSL-clean shaders like `PlayableKit/UI_Shine`, and register required shader variants in `Assets/SVC_Luna.asset`.
+
+---
+
+## 6. Luna Engine JS Bugs Patched Post-Build (`PALunaBuildPatcher`)
+Some Luna runtime bugs live in the generated JS, not in C#. `PALunaBuildPatcher` (package `com.kat.playablekit`,
+`[InitializeOnLoad]`) polls `LunaTemp` every 5 s and re-applies string patches whenever Luna rewrites a file; a marker
+string makes it idempotent. If a needle stops matching after a Luna upgrade the patch silently stops applying, so
+re-check after changing Luna versions (`Tools/PlayableKit/Luna/Apply Build Patches Now` reports the count).
+- **`physics3d-0.js`: `Error: Not implemented for the mesh shape`**: a Rigidbody with a `MeshCollider` throws when
+  Luna computes inertia. The patch adds a box-approximation inertia from the mesh bounds. Without the patcher, use
+  primitive colliders on dynamic bodies.
+- **`UnityEngine.js`: `VideoPlayer.isLooping` not honoured**: the setter never reaches the HTML `<video>`, the element
+  is created without `loop`/`autoplay`, and the end event replays without resetting `currentTime`. The patch forwards
+  `loop`, sets `autoplay`/`loop` on creation, and only replays manually when native loop is off.

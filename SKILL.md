@@ -35,6 +35,8 @@ Follow the guardrails and workflows below whenever building, refactoring, debugg
 | Area | ❌ Don't (Breaks or Warns in Luna) | ✅ Do Instead (Luna-Safe) |
 |---|---|---|
 | **UGUI Layout** | `ScrollRect`, `Scrollbar`, `Slider`, `LayoutGroup` (H/V/Grid), `ContentSizeFitter`, `AspectRatioFitter` (`DrivenRectTransformTracker.Clear` warning & lazy first-open bugs) | Run **Tools/PA/Sanitize UI For Luna** (`PALunaUiSanitizer`) to bake rects; use `PAAspectFitter`, `PADragScroll`, `PALayout` |
+| **Sprite shader** | URP `2D/Sprite-Unlit-Default` on a SpriteRenderer (skinning variant uses an `std430` SSBO -> `Failed to compile shader program` in WebGL) | Built-in `Sprites/Default` material (`Sprites-Default.mat`) |
+| **UGUI Hiding** | `graphic.enabled = false` to hide (Luna's `Graphic.OnDisable` never clears the `CanvasRenderer` -> last mesh keeps drawing, stale/ghost UI in the build) | `graphic.gameObject.SetActive(false)` (guard with `activeSelf` if called per frame) |
 | **UGUI Clipping** | `RectMask2D` (`SetClipRect` is an unimplemented no-op in Luna's `UnityEngine.UI.js`) | Use `Mask` with a plain (`Simple`, non-Sliced) `Image` stencil; call `SetVerticesDirty()` if resized at runtime |
 | **EventSystem** | `InputSystemUIInputModule` (missing in Luna's `UnityEngine.UI.js` -> dead UI clicks) | Guard new Input System with `#if ENABLE_INPUT_SYSTEM && !UNITY_LUNA`; ensure `StandaloneInputModule` is added under `#if UNITY_LUNA` |
 | **Serialization** | Generic `[Serializable]` types (e.g., `[SerializeField] Oriented<T>` -> silently `null` in Luna 7.2) | Use concrete non-generic `[Serializable]` classes |
@@ -45,6 +47,8 @@ Follow the guardrails and workflows below whenever building, refactoring, debugg
 | **Animator** | `Animator.StringToHash` int overloads (`SetTrigger(hash)` loses animations in Luna) | Always use string overloads: `SetBool("IsMove", true)`, `SetTrigger("Die")` |
 | **Particles** | ParticleSystem `Trails` module (ribbon) and `Bursts` / sprite-sheet start frame (vanish in Luna) | Use `TrailRenderer` on a child object; use `rateOverTime` / `rateOverDistance` |
 | **Custom Shaders** | Dividing `Sprite.textureRect` (native px) by `Texture.width/height` (Luna downscaled `<=512`), or mutating a cached `Vector4` passed to `Material.SetVector` | Normalize/clamp UV rects (`>1` -> `(0,0,1,1)`), bake sprite sheet rects in Editor, and pass `new Vector4(...)` to `Material.SetVector` |
+| **UI Shader Position** | Deriving position from `v.vertex` / `unity_ObjectToWorld` in a UI shader (space differs: Game view vs Scene view vs Luna) | Map from sprite UV with a per-material affine set from C# (world corners); `v.vertex` only for `_ClipRect` |
+| **Data Textures** | Fully opaque texture (or `RGB24` default import format) -> Luna exports lossy JPEG, ignoring `luna.json` compression/format; WebGL override ignored when active target is Standalone | Bake alpha 254 into the PNG, default format `RGBA32` uncompressed, `luna.json` `"compression": "none"`; verify `ext: ".png"` in `LunaTemp/stage2/assets/textures/<id>.json` |
 | **Audio** | `AudioListener.pause` (CS0117, not in Luna) | `AudioListener.volume = 0f` on pause, restore the saved volume on resume |
 | **URP Renderer** | URP **2D Renderer** (`Renderer2DData`) on Unity 6 / URP 17 -> Stage 1 `LP1025` (`copyDepthMode` not found) | Switch the URP asset to a `UniversalRendererData`; remove template `Global Light 2D` |
 | **Sliced UV effects** | Sweep/gradient shaders reading raw UVs on `Sliced` images (band jumps/bends) | Remap sliced UVs with border uniforms (`PAUIShine.RefreshSlice`) |
@@ -71,10 +75,15 @@ Follow the guardrails and workflows below whenever building, refactoring, debugg
 - See [Plugin UI & `luna.json` Guide](./references/plugin-ui-and-luna-json.md) for full `luna.json` tuning and stage-by-stage build diagnostics.
 
 ### Workflow C: Pre-Build Verification & Scene Sanitization
-Before triggering a Luna build, run the project's Editor verification tools:
-1. **`Tools/PA/Sanitize UI For Luna`** (`PALunaUiSanitizer`) — Bakes and removes `LayoutGroup` & `ContentSizeFitter`, converts `AspectRatioFitter` -> `PAAspectFitter`, converts `ScrollRect` -> `PADragScroll`.
-2. **`Tools/Sp Unity/Playable Ads Checker`** (`PlayableAdsCheckerWindow`) — Scans active scene dependencies for missing scripts/refs, texture/audio usage, and forbidden C# patterns (`Resources.Load`, `PlayerPrefs`, C# 9+ syntax, `try/catch`, `FindObjectOfType`, etc.).
-3. **`Tools/MyLunaHelper/Compliance Tool`** (`LunaComplianceWindow`) & **`Spine Binary Inspector`** — Checks for `.skel.bytes`, URP/Lit/ShaderGraph materials, and blocked DOTween files.
+Before triggering a Luna build, run the project's Editor verification tools. **Tools differ per project**: check the
+[Tool Locations table](./references/architecture-and-porting.md#32-editor-tool-locations-which-project-has-what) and
+use the `com.kat.playablekit` package menus when present, the legacy per-project copies otherwise.
+1. **Sanitize UI For Luna** (`PALunaUiSanitizer`; `Tools/PlayableKit/...` in the package, `Tools/PA/...` in legacy copies) — Bakes and removes `LayoutGroup` & `ContentSizeFitter`, converts `AspectRatioFitter` -> `PAAspectFitter`, converts `ScrollRect` -> `PADragScroll`.
+2. **Dependency / code scan** — `Tools/PlayableKit/PlayableKit Control Center` (`Ctrl+Shift+K`) in the package, or legacy `Tools/Sp Unity/Playable Ads Checker` (`PlayableAdsCheckerWindow`). Scans active scene dependencies for missing scripts/refs, texture/audio usage, and forbidden C# patterns (`Resources.Load`, `PlayerPrefs`, C# 9+ syntax, `try/catch`, `FindObjectOfType`, etc.).
+3. **Compliance & Spine** — Control Center compliance panel, or legacy `Tools/MyLunaHelper/Compliance Tool` (`MyLunaComplianceWindow`) & `Spine Binary Inspector`. Checks for `.skel.bytes`, URP/Lit/ShaderGraph materials, and blocked DOTween files.
+4. **Project preflight**, if the project has one (e.g. `BikePlayable/Preflight Validation`).
+5. Projects with the package's `PALunaBuildPatcher` re-patch `LunaTemp` JS automatically; force it with `Tools/PlayableKit/Luna/Apply Build Patches Now` after a build.
+- Hand-edited `luna.json` while the Luna window is open may be overwritten from memory: reload it (`Tools/Luna/Refresh From Disk` where `LunaTools` exists, otherwise reopen the window / reload scripts). See [Plugin UI guide](./references/plugin-ui-and-luna-json.md#34-hand-edits-to-lunajson-get-overwritten).
 - See [Architecture & Porting Guide](./references/architecture-and-porting.md) for scene hierarchy templates, coordinator architecture, and new-project bring-up steps.
 
 ---
@@ -85,4 +94,4 @@ Read the relevant reference file when working on a specific area:
 - **[Luna API & Lifecycle](./references/luna-api-and-lifecycle.md)**: `Luna.Unity.LifeCycle`, `Playable.InstallFullGame`, `Analytics`, `[LunaPlaygroundField]`, `LunaManager.Session`, and store-return pause handling.
 - **[Plugin UI & `luna.json` Optimization](./references/plugin-ui-and-luna-json.md)**: Official Plugin UI tabs (`Settings`, `Assets`, `Code`, `Build & Upload`, `Size Breakdown`), `luna.json` configuration, `<5 MB` size reduction playbook, and `EBUSY` / `LP1032` fixes.
 - **[Constraints & Runtime Gotchas](./references/constraints-and-gotchas.md)**: Deep dive into Luna C#-to-JS transpiler limits, `EventSystem` / polled input bugs, `Mask` vs `RectMask2D`, custom shader UV/Vector4 bugs, nested coroutine termination, and tween/animator rules.
-- **[PA Architecture & Porting](./references/architecture-and-porting.md)**: `PALiveGame` / `PAGameFlow` / `PALivePanel` coordinator pattern, dual-orientation canvas setup, `PlayableKit`, and step-by-step checklist for porting to a new Unity project.
+- **[PA Architecture & Porting](./references/architecture-and-porting.md)**: `PALiveGame` / `PAGameFlow` / `PALivePanel` coordinator pattern, dual-orientation canvas setup, `PlayableKit`, which project has which Editor tool, local Luna SDK copies, and step-by-step checklist for porting to a new Unity project.

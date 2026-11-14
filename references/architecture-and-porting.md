@@ -56,19 +56,36 @@ Depends only on `TweenLite.cs` (`Playable.Tweening`) and `UnityEngine.UI`:
 - **Tweens**: `DoScaleAToB`, `DoMoveAToB`, `DoFadeAToB`, `ButtonRotate`, `UiSlide`, `UiPageSlide`.
 - **UI**: `HoldButton`, `UiDragRotate`, `BillboardToCamera`.
 
-### 3.2 Pre-Build Editor Verification Tools
-Run these before every Luna build:
-1. **`Tools/PA/Sanitize UI For Luna`** (`Assets/Scripts/Playable/Supermarket/Editor/PALunaUiSanitizer.cs`):
-   - Removes `LayoutGroup` & `ContentSizeFitter` after baking child rects.
-   - Replaces `AspectRatioFitter` with `PAAspectFitter`.
-   - Replaces `ScrollRect` with `PADragScroll` and rewires references.
-2. **`Tools/Sp Unity/Playable Ads Checker`** (`Assets/MyLunaUtils/Editor/PlayableAdsCheckerWindow.cs`):
-   - Deep-scans only objects/prefabs/ScriptableObjects actually referenced from the active scene.
-   - Flags missing scripts, missing materials/meshes/sprites/Spine data, texture/audio footprint, and forbidden code (`Resources.Load`, `PlayerPrefs`, C# 9+ syntax, `try/catch`, `FindObjectOfType`, etc.).
-3. **`Tools/MyLunaHelper/Compliance Tool`** (`MyLunaComplianceWindow.cs`) & **`Spine Binary Inspector`** (`LunaSpineSceneSkelScanner.cs`):
-   - Detects `.skel.bytes` binary Spine files, unsupported `URP` / `Lit` / `Shader Graph` materials, and blocked DOTween files.
-4. **EditMode Test `NoRuntimeResourceLoadTests.cs`** (`Assets/Editor/NoRuntimeResourceLoadTests.cs`):
-   - Guards against runtime `Resources.Load` calls.
+### 3.2 Editor Tool Locations (Which Project Has What)
+Tools are **not** in every project. Grep for the class name before telling the user to run a menu.
+Prefer the package versions; legacy copies are older forks of the same idea.
+
+| Tool | Menu | Where it lives |
+|---|---|---|
+| PlayableKit Control Center (dependency/code scanner, Luna compliance + Spine `.skel` scan, UI sanitizer, exporter) | `Tools/PlayableKit/PlayableKit Control Center` (`Ctrl+Shift+K`) | Package `com.kat.playablekit` (`PlayableKit/Packages/com.kat.playablekit/Editor/`) |
+| `PALunaUiSanitizer` | `Tools/PlayableKit/Sanitize UI For Luna` | Package; StickiiPA `Assets/PlayableKit/Editor/` |
+| `PALunaUiSanitizer` (legacy) | `Tools/PA/Sanitize UI For Luna` | IdolMukbang `Assets/Scripts/Playable/Supermarket/Editor/` |
+| `PALunaBuildPatcher` (auto-patches `LunaTemp` JS: physics mesh-shape inertia, VideoPlayer looping; see constraints section 6) | `Tools/PlayableKit/Luna/Apply Build Patches Now` | Package |
+| `PAAudioImportOptimizer` (WebGL SFX/Music import presets) | `Tools/PlayableKit/Audio Import Optimizer` | Package |
+| `PAPackageExporter` | `Tools/PlayableKit/Export PlayableKit.unitypackage` | Package |
+| `PAShoreFieldGenerator` (hole distance field, alpha-254 PNG) | `Tools/PlayableKit/Shore Field Generator` | StickiiPA only |
+| `PlayableAdsCheckerWindow` | `Tools/Sp Unity/Playable Ads Checker` | IdolMukbang `MyLunaUtils/Editor`, SatisFix (Home-Clean, perfectcleaning) `Assets/Editor`, `Projects/Package/` |
+| `MyLunaComplianceWindow`, `LunaSpineSceneSkelScanner`, `FindAssetByID`, `CleanerTool` | `Tools/MyLunaHelper/...` (Compliance Tool, Spine Binary Inspector, Find Asset By ID, Force Remove All AssetBundles) | `Assets/MyLunaUtils/Editor/` in IdolMukbang, SatisFix, ScoopAndPack |
+| `LunaPreflightValidator` + shared `LunaPreflightChecks` (scene readiness, serialized refs, Luna config) | `BikePlayable/Preflight Validation` | BikePlayable (`Assets/Editor/`, `Assets/_Template/Scripts/Editor/`) |
+| `LunaTools` (`LunaConfigBridge`, `LunaAssetsSyncOverlay`): reflection bridge into Luna's `EditorScripts.dll` (SHA-256 guarded, disk-only fallback) to re-read / force-save `luna.json`, plus a Refresh/Apply bar on the Luna window | `Tools/Luna/Refresh From Disk`, `Apply To luna.json`, `Diagnose Bridge` | GangterCity `Assets/Editor/LunaTools/` |
+| `NoRuntimeResourceLoadTests` (EditMode test, guards runtime `Resources.Load`) | Test Runner | IdolMukbang `Assets/Editor/` |
+
+Reusable shaders: GangterCity `Assets/Shaders/LunaMapStandard{Opaque,Fade,Transparent}.shader`
+(Standard-lookalike clones that survive Luna) and `LunaFakeShadow.shader` (texture-free unlit ellipse/box decal shadow).
+
+**Local Luna SDK copies** (read engine JS / pipeline when root-causing a runtime bug):
+`D:/Phuc/Projects/Home-Clean-Playable/Doc/LunaSDK/6.4.0/` and `.../7.0.0/` (`engine/`, `pipeline/`, `scripts/`, `tools/`).
+Decompiled plugin (`EditorScripts.dll`) behaviour notes: [constraints 5.0](./constraints-and-gotchas.md).
+
+### 3.3 Pre-Build Run Order
+1. Sanitize UI For Luna (rows above).
+2. Control Center scan, or Playable Ads Checker + Compliance Tool + Spine Binary Inspector.
+3. Project preflight and EditMode tests, if the project has them.
 
 ---
 
@@ -94,5 +111,5 @@ Run these before every Luna build:
    - Enable only the new PA scene in `unity.scenes`; place all others in `unity.disabledScenes`.
    - Clear `unusedModules`, `unusedClasses`, and `unusedMethods` so Luna regenerates them for the new project.
 5. **Verify & Build**:
-   - Run **Sanitize UI For Luna** and **Playable Ads Checker**.
+   - Run **Sanitize UI For Luna** and the Control Center scan (or legacy **Playable Ads Checker**); see 3.2 for which exists.
    - Stop any running Luna preview web server, run a full Luna build, and test both Portrait and Landscape orientations, CTA clicks, store return, idle timeout, and end timer in the browser.
