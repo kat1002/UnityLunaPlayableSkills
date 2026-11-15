@@ -15,7 +15,7 @@ already solves them. Kit rules never override Luna rules: a kit component still 
 Links to `../` point into the parent skill folder; if this sub-skill is installed on its own (symlink/junction),
 load the `unity-luna-playworks` skill instead of following them.
 
-Repo: `https://github.com/kat1002/PlayableKit` (source of truth: `Packages/com.kat.playablekit/`, v2.0.0).
+Repo: [github.com/kat1002/PlayableKit](https://github.com/kat1002/PlayableKit) (source of truth: `Packages/com.kat.playablekit/`, v2.0.0).
 Needs Unity 2021.3+ (tested 2022.3 and Unity 6). Luna 6.4 / Playworks 7.2 optional: without Luna the kit compiles,
 lifecycle/analytics calls are no-ops and `InstallFullGame` only logs.
 
